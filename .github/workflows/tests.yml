@@ -1,0 +1,117 @@
+name: Tests
+
+permissions: {}
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  tests:
+    name: Tests
+    permissions:
+      contents: read
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.13", "3.12", "3.11", "3.10", "3.9", "3.8"]
+    steps:
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install libboost-all-dev libgsl0-dev libeigen3-dev
+
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Build and Install
+        run: |
+          cd similarity_search
+          cmake . -DWITH_EXTRAS=1
+          make
+          cd ..
+
+      - name: Test with pytest and generate coverage file
+        run:
+          cd python_bindings && uvx -p ${{ matrix.python-version }} --with
+          tox-uv tox -e py
+
+  build_wheels:
+    name: Build
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        python-version: ["3.13", "3.12", "3.11", "3.10", "3.9", "3.8"]
+        os:
+          - ubuntu-latest
+          - ubuntu-24.04-arm
+          - windows-latest
+          # - windows-11-arm # arm is busted, CIBW_ARCHS_WINDOWS=x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Build wheels
+        run: uv build --wheel python_bindings/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.python-version }}-${{ matrix.os }}
+          path: python_bindings/dist/*.whl
+
+  build_wheels_mac:
+    name: Build (Mac)
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        python-version: ["3.13", "3.12", "3.11", "3.10", "3.9", "3.8"]
+        os:
+          - macos-13
+          - macos-14
+          - macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+      - name: Build wheels
+        run:
+          CXXFLAGS="${CXXFLAGS/-march=native/}" uv build --wheel
+          python_bindings/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-${{ matrix.python-version }}-${{ matrix.os }}
+          path: python_bindings/dist/*.whl
+
+  aggregate:
+    needs:
+      - build_wheels
+      - build_wheels_mac
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: combined-artifacts
+
+      - name: Show combined contents (optional)
+        run: ls -R combined-artifacts
+
+      - name: Upload combined artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: all-platform-builds
+          path: combined-artifacts/
